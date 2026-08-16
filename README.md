@@ -202,6 +202,8 @@ cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars
 ```
 
+`terraform.tfvars` is gitignored so local region and naming choices stay off GitHub. Keep committing `terraform.tfvars.example` only.
+
 Edit `terraform.tfvars` if you want a different region, name prefix, or throttle limits. Defaults are fine for a first deploy:
 
 ```hcl

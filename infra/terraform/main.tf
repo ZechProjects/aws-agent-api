@@ -55,11 +55,10 @@ resource "aws_iam_role_policy" "lambda_logs" {
       {
         Effect = "Allow"
         Action = [
-          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:*:*"
+        Resource = "${aws_cloudwatch_log_group.lambda.arn}:*"
       }
     ]
   })
@@ -86,6 +85,8 @@ resource "aws_lambda_function" "handler" {
       LOG_LEVEL = "info"
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 
   tags = local.default_tags
 }
