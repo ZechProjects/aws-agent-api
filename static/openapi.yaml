@@ -1,0 +1,138 @@
+openapi: 3.0.3
+info:
+  title: AWS Agent API Demo
+  version: 1.0.0
+  description: |
+    Mock API for AI-agent integration testing on API Gateway and Lambda.
+
+    This service exposes two copies of the same mock completion:
+    - `/v1/*` is AI-agent-friendly (named fields, tool catalog, structured errors).
+    - `/legacy/*` is a traditional enterprise RPC shape, kept for comparison only.
+servers:
+  - url: https://example.execute-api.us-east-1.amazonaws.com
+paths:
+  /v1/health:
+    get:
+      summary: Service health
+      operationId: getHealth
+      responses:
+        "200":
+          description: Healthy response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  time:
+                    type: string
+                    format: date-time
+  /v1/agent/tools:
+    get:
+      summary: Agent tool catalog
+      operationId: getToolCatalog
+      responses:
+        "200":
+          description: Tool list
+          content:
+            application/json:
+              schema:
+                type: object
+  /v1/agent/mock:
+    post:
+      summary: Mock completion
+      operationId: createMockCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                  maxLength: 2000
+                metadata:
+                  type: object
+      responses:
+        "200":
+          description: Mock completion response
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Invalid request
+        "413":
+          description: Prompt too large
+  /legacy/health:
+    get:
+      summary: Traditional health check
+      description: Intentionally not agent-friendly. Returns `{ "d": { "sts": 1, "ts": "<compact UTC>" } }`.
+      operationId: getLegacyHealth
+      responses:
+        "200":
+          description: Compact status payload
+          content:
+            application/json:
+              schema:
+                type: object
+  /legacy/ops:
+    get:
+      summary: Traditional operation codes
+      description: Intentionally not agent-friendly. Returns numeric action codes with no names or schemas.
+      operationId: getLegacyOps
+      responses:
+        "200":
+          description: Numeric operation list
+          content:
+            application/json:
+              schema:
+                type: object
+  /legacy/exec:
+    post:
+      summary: Traditional mock completion
+      description: |
+        Same mock completion as POST /v1/agent/mock, using an enterprise RPC envelope.
+        Requires header `X-Session-Id`. Always returns HTTP 200; inspect `d.ReturnCode`.
+        ActionCode 1003 is mock completion. Prompt is ParamList key P1.
+      operationId: createLegacyMockCompletion
+      parameters:
+        - in: header
+          name: X-Session-Id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                d:
+                  type: object
+                  properties:
+                    ActionCode:
+                      type: integer
+                    ParamList:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          Key:
+                            type: string
+                          Val:
+                            type: string
+      responses:
+        "200":
+          description: Envelope response. ReturnCode 00 is success; any other code is an error.
+          content:
+            application/json:
+              schema:
+                type: object

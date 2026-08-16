@@ -1,0 +1,50 @@
+{
+  "style": "AI agent-friendly",
+  "why": "Named fields, self-describing schema, HTTP status codes, structured errors, and ISO-8601 timestamps. An agent can call this from the tool catalog without tribal knowledge.",
+  "endpoint": "POST /v1/agent/mock",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "request": {
+    "prompt": "Summarize API best practices for agents",
+    "metadata": {
+      "source": "integration-test"
+    }
+  },
+  "response": {
+    "http_status": 200,
+    "body": {
+      "object": "chat.completion",
+      "id": "mock-1710000000000",
+      "created": 1710000000,
+      "model": "mock-agent-model-v1",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Mock completion for: Summarize API best practices for agents"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 15,
+        "total_tokens": 25
+      },
+      "metadata": {
+        "source": "integration-test"
+      }
+    }
+  },
+  "error_example": {
+    "http_status": 400,
+    "body": {
+      "error": {
+        "code": "missing_prompt",
+        "message": "Field 'prompt' is required."
+      }
+    }
+  }
+}

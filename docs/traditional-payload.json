@@ -1,0 +1,61 @@
+{
+  "style": "traditional (not AI agent-friendly)",
+  "why": "Same mock completion as the agent-friendly API, wrapped in an enterprise RPC envelope: numeric action codes, required session header, nested ParamList, DataTable columns, compact timestamps, and HTTP 200 for every outcome including errors.",
+  "endpoint": "POST /legacy/exec",
+  "headers": {
+    "content-type": "application/json",
+    "x-session-id": "00000000-0000-0000-0000-000000000000"
+  },
+  "request": {
+    "d": {
+      "__type": "ProcessRequest:http://tempuri.org/",
+      "ActionCode": 1003,
+      "ParamList": [
+        {
+          "Key": "P1",
+          "Val": "Summarize API best practices for agents"
+        },
+        {
+          "Key": "P2",
+          "Val": "{\"src\":\"integration-test\"}"
+        }
+      ]
+    }
+  },
+  "response": {
+    "http_status": 200,
+    "body": {
+      "d": {
+        "ReturnCode": "00",
+        "ReturnMsg": "SUCCESS",
+        "ExecDt": "20260816125300",
+        "ResultSet": {
+          "Tables": [
+            {
+              "TableName": "Table1",
+              "Cols": ["COL1", "COL2", "COL3", "COL4", "COL5"],
+              "Rows": [
+                [
+                  "mock-1710000000000",
+                  "Mock completion for: Summarize API best practices for agents",
+                  "10",
+                  "15",
+                  "25"
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "error_example": {
+    "http_status": 200,
+    "body": {
+      "d": {
+        "ReturnCode": "04",
+        "ReturnMsg": "NOP1"
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Machine-readable docs for agents
+# llms.txt is available from the same host root.

@@ -1,0 +1,18 @@
+# AWS Agent API Demo
+
+This endpoint publishes machine-readable API access details for AI agents.
+
+## API Entry Points
+- GET /v1/health
+- GET /v1/agent/tools
+- POST /v1/agent/mock
+
+Do not use `/legacy/*`. Those routes are a traditional RPC copy of the same mock and are not agent-friendly.
+
+## Discovery
+- /openapi.yaml
+- /robots.txt
+
+## Safety Notes
+- This is a mock API for integration testing.
+- Do not send secrets, credentials, or personal data.
