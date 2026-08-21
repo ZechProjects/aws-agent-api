@@ -21,11 +21,13 @@ This project creates a production-minded demo for exposing a mock API to AI agen
 3. Side-by-side payload samples in `docs/`:
    - `docs/agent-friendly-payload.json`
    - `docs/traditional-payload.json`
-4. Static docs published through CloudFront:
+4. Optional AWS WAF examples for agent-friendly bot control:
+   - `docs/waf-agent-friendly.tf.example`
+5. Static docs published through CloudFront:
    - `/robots.txt`
    - `/llms.txt`
    - `/openapi.yaml`
-5. Terraform IaC with secure defaults:
+6. Terraform IaC with secure defaults:
    - Lambda least-privilege logging policy
    - API throttling and access logs
    - S3 private bucket with CloudFront Origin Access Control (OAC)
@@ -34,7 +36,7 @@ This project creates a production-minded demo for exposing a mock API to AI agen
 ## Project Layout
 
 ```text
-docs/                 # Side-by-side agent-friendly vs traditional payload samples
+docs/                 # Payload samples + optional agent-friendly AWS WAF examples
 infra/terraform/      # Infrastructure as code
 src/lambda/           # Lambda handler code
 static/               # robots.txt, llms.txt, openapi.yaml hosted on CloudFront
@@ -77,6 +79,7 @@ If you prefer least privilege instead of AdministratorAccess, the deployer needs
 - CloudWatch Logs
 - S3
 - CloudFront
+- AWS WAF (only if you adopt the optional examples in `docs/waf-agent-friendly.tf.example`)
 
 ### 3. Install Git and clone this repo
 
@@ -325,6 +328,29 @@ State files (`*.tfstate`) stay on your machine under `infra/terraform/` and are 
 - CloudWatch access logs for API observability.
 - Private S3 origin with CloudFront OAC instead of public bucket hosting.
 - Machine-readable discovery assets (`llms.txt`, `openapi.yaml`) served from a fast edge cache.
+- Optional AWS WAF patterns that protect APIs without blocking legitimate AI agents.
+
+## Optional: Agent-friendly AWS WAF
+
+The default Terraform stack does **not** create a WAF (Bot Control is a paid managed rule group). Use `docs/waf-agent-friendly.tf.example` when you want edge protection that still works for agents.
+
+Agent-friendly WAF checklist:
+
+1. **Pin Bot Control to `Version_4.0` or later** (prefer `Version_5.0+`) so [Web Bot Auth (WBA)](https://aws.amazon.com/blogs/security/authenticate-legitimate-ai-agent-traffic-with-aws-waf-bot-control/) is available. You must select a static version explicitly.
+2. **Allow discovery paths first** — never Challenge/CAPTCHA `/robots.txt`, `/llms.txt`, or `/openapi.yaml`.
+3. **Allow WBA-verified agents** after Bot Control runs, matching label `awswaf:managed:aws:bot-control:bot:web_bot_auth:verified`.
+4. **Use COMMON inspection** on JSON APIs; TARGETED Challenge/CAPTCHA breaks headless agents.
+5. **Count or override noisy CRS rules** such as `SizeRestrictions_BODY` before hard-blocking agent POST bodies.
+6. **Rate-limit unverified automation**; reserve hard blocks for invalid/expired WBA signatures after you review logs.
+7. **Roll out in Count mode**, watch the WAF AI activity dashboard / sampled requests, then tighten.
+
+The example file includes:
+
+- A **CloudFront** (`CLOUDFRONT` scope, `us-east-1`) web ACL for the docs distribution
+- A **Regional** web ACL sketch for API Gateway `/v1/*`
+- Console/CLI JSON snippets for the same allow rules
+
+After copying rules into your stack, attach the CloudFront ACL with `web_acl_id` on the distribution, and the API ACL with `aws_wafv2_web_acl_association` on the HTTP API stage.
 
 ## Customization
 
@@ -332,6 +358,7 @@ State files (`*.tfstate`) stay on your machine under `infra/terraform/` and are 
 - Tune throttling, CORS, retention: `infra/terraform/variables.tf` (or `terraform.tfvars`)
 - Update agent docs: `static/llms.txt` and `static/openapi.yaml`
 - Compare payload shapes: `docs/agent-friendly-payload.json` and `docs/traditional-payload.json`
+- Optional WAF patterns: `docs/waf-agent-friendly.tf.example`
 
 After changing Lambda or static files, run `terraform apply` again from `infra/terraform`.
 

@@ -1,0 +1,439 @@
+# Optional AWS WAF examples for agent-friendly access.
+#
+# These are NOT applied by the default stack (Bot Control is a paid managed
+# rule group). Copy the pieces you need into infra/terraform, or create a
+# separate web ACL and attach it to CloudFront / API Gateway.
+#
+# Goals:
+# 1. Keep bots/scrapers under control.
+# 2. Allow cryptographically verified AI agents (Web Bot Auth / WBA).
+# 3. Never challenge or block discovery files agents need (/robots.txt, /llms.txt, /openapi.yaml).
+# 4. Prefer Count/rate-limit first; switch to Block only after reviewing WAF logs.
+#
+# Requires AWSManagedRulesBotControlRuleSet Version_4.0 or later (WBA support).
+# Prefer Version_5.0+ for broader AI crawler / agent coverage.
+#
+# Attach scope:
+# - CLOUDFRONT web ACL (us-east-1) for the docs distribution
+# - REGIONAL web ACL for API Gateway HTTP API (optional second ACL)
+
+################################################################################
+# Shared locals
+################################################################################
+
+locals {
+  # Discovery paths that agents and crawlers must reach without CAPTCHA/Challenge.
+  agent_discovery_paths = [
+    "/robots.txt",
+    "/llms.txt",
+    "/openapi.yaml",
+  ]
+}
+
+################################################################################
+# Example 1 — CloudFront web ACL (docs / machine-readable discovery)
+################################################################################
+
+resource "aws_wafv2_web_acl" "agent_docs_cloudfront" {
+  provider = aws.us_east_1 # CloudFront WAFs must live in us-east-1
+
+  name  = "${local.name_prefix}-agent-docs-waf"
+  scope = "CLOUDFRONT"
+
+  default_action {
+    allow {}
+  }
+
+  # Rule priority matters: discovery allow -> Bot Control labels -> custom allow/deny.
+
+  rule {
+    name     = "AllowAgentDiscoveryPaths"
+    priority = 0
+
+    action {
+      allow {}
+    }
+
+    statement {
+      or_statement {
+        dynamic "statement" {
+          for_each = local.agent_discovery_paths
+          content {
+            byte_match_statement {
+              positional_constraint = "EXACTLY"
+              search_string         = statement.value
+              field_to_match {
+                uri_path {}
+              }
+              text_transformation {
+                priority = 0
+                type     = "NONE"
+              }
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowAgentDiscoveryPaths"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesBotControlRuleSet"
+    priority = 10
+
+    override_action {
+      # Start with none so managed actions apply; use "count" during a dry-run rollout.
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesBotControlRuleSet"
+        vendor_name = "AWS"
+        # Explicit static version required for Web Bot Auth (WBA).
+        version     = "Version_5.0"
+
+        managed_rule_group_configs {
+          aws_managed_rules_bot_control_rule_set {
+            # COMMON: self-identifying bots + WBA verification labels.
+            # TARGETED: adds browser interrogation / heuristics (often too aggressive for APIs).
+            inspection_level = "COMMON"
+          }
+        }
+
+        # Optional: do not hard-block CategoryAI while you learn traffic patterns.
+        # Verified WBA traffic is already exempt from CategoryAI in Version_4.0+.
+        rule_action_override {
+          name = "CategoryAI"
+          action_to_use {
+            count {}
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "BotControl"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Explicit allow AFTER Bot Control so WBA labels exist.
+  rule {
+    name     = "AllowWbaVerifiedAgents"
+    priority = 20
+
+    action {
+      allow {}
+    }
+
+    statement {
+      label_match_statement {
+        scope = "LABEL"
+        key   = "awswaf:managed:aws:bot-control:bot:web_bot_auth:verified"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowWbaVerifiedAgents"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Also allow historically verified bots (search engines, etc.) if other rules would block them.
+  rule {
+    name     = "AllowVerifiedBots"
+    priority = 21
+
+    action {
+      allow {}
+    }
+
+    statement {
+      label_match_statement {
+        scope = "LABEL"
+        key   = "awswaf:managed:aws:bot-control:bot:verified"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowVerifiedBots"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Failed WBA signatures: rate-limit instead of immediate hard block while tuning.
+  rule {
+    name     = "RateLimitInvalidWba"
+    priority = 30
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 100
+        aggregate_key_type = "IP"
+
+        scope_down_statement {
+          label_match_statement {
+            scope = "LABEL"
+            key   = "awswaf:managed:aws:bot-control:bot:web_bot_auth:invalid"
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "RateLimitInvalidWba"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${local.name_prefix}-agent-docs-waf"
+    sampled_requests_enabled   = true
+  }
+
+  tags = local.default_tags
+}
+
+# Attach to the existing CloudFront distribution:
+#
+# resource "aws_cloudfront_distribution" "agent_docs" {
+#   web_acl_id = aws_wafv2_web_acl.agent_docs_cloudfront.arn
+#   ...
+# }
+
+################################################################################
+# Example 2 — Regional web ACL for API Gateway (agent API routes)
+################################################################################
+
+resource "aws_wafv2_web_acl" "agent_api_regional" {
+  name  = "${local.name_prefix}-agent-api-waf"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 0
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+
+        # JSON bodies from agents often trip SizeRestrictions_BODY on larger prompts.
+        # Count first, then raise limits or keep Count for /v1/agent/mock only.
+        rule_action_override {
+          name = "SizeRestrictions_BODY"
+          action_to_use {
+            count {}
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "CommonRuleSet"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesBotControlRuleSet"
+    priority = 10
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesBotControlRuleSet"
+        vendor_name = "AWS"
+        version     = "Version_5.0"
+
+        managed_rule_group_configs {
+          aws_managed_rules_bot_control_rule_set {
+            inspection_level = "COMMON"
+          }
+        }
+
+        # Targeted Challenge / CAPTCHA rules break headless agents on JSON APIs.
+        # Keep COMMON; do not enable TARGETED CAPTCHA on /v1/* without an allow path.
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "BotControlApi"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AllowWbaVerifiedAgents"
+    priority = 20
+
+    action {
+      allow {}
+    }
+
+    statement {
+      label_match_statement {
+        scope = "LABEL"
+        key   = "awswaf:managed:aws:bot-control:bot:web_bot_auth:verified"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowWbaVerifiedAgentsApi"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Gentle rate limit for unverified automation hitting the mock completion route.
+  rule {
+    name     = "RateLimitUnverifiedMock"
+    priority = 40
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 300
+        aggregate_key_type = "IP"
+
+        scope_down_statement {
+          and_statement {
+            statement {
+              byte_match_statement {
+                positional_constraint = "STARTS_WITH"
+                search_string         = "/v1/agent"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "NONE"
+                }
+              }
+            }
+            statement {
+              not_statement {
+                statement {
+                  label_match_statement {
+                    scope = "LABEL"
+                    key   = "awswaf:managed:aws:bot-control:bot:web_bot_auth:verified"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "RateLimitUnverifiedMock"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${local.name_prefix}-agent-api-waf"
+    sampled_requests_enabled   = true
+  }
+
+  tags = local.default_tags
+}
+
+# Attach to API Gateway stage (REGIONAL):
+#
+# resource "aws_wafv2_web_acl_association" "agent_api" {
+#   resource_arn = aws_apigatewayv2_stage.default.arn
+#   web_acl_arn   = aws_wafv2_web_acl.agent_api_regional.arn
+# }
+
+################################################################################
+# Example 3 — Standalone JSON rule snippets (Console / CLI)
+################################################################################
+#
+# Allow WBA-verified agents:
+# {
+#   "Name": "AllowWbaVerifiedAgents",
+#   "Priority": 20,
+#   "Action": { "Allow": {} },
+#   "Statement": {
+#     "LabelMatchStatement": {
+#       "Scope": "LABEL",
+#       "Key": "awswaf:managed:aws:bot-control:bot:web_bot_auth:verified"
+#     }
+#   },
+#   "VisibilityConfig": {
+#     "SampledRequestsEnabled": true,
+#     "CloudWatchMetricsEnabled": true,
+#     "MetricName": "AllowWbaVerifiedAgents"
+#   }
+# }
+#
+# Allow discovery files:
+# {
+#   "Name": "AllowAgentDiscoveryPaths",
+#   "Priority": 0,
+#   "Action": { "Allow": {} },
+#   "Statement": {
+#     "OrStatement": {
+#       "Statements": [
+#         { "ByteMatchStatement": {
+#             "FieldToMatch": { "UriPath": {} },
+#             "PositionalConstraint": "EXACTLY",
+#             "SearchString": "/robots.txt",
+#             "TextTransformations": [{ "Priority": 0, "Type": "NONE" }]
+#         }},
+#         { "ByteMatchStatement": {
+#             "FieldToMatch": { "UriPath": {} },
+#             "PositionalConstraint": "EXACTLY",
+#             "SearchString": "/llms.txt",
+#             "TextTransformations": [{ "Priority": 0, "Type": "NONE" }]
+#         }},
+#         { "ByteMatchStatement": {
+#             "FieldToMatch": { "UriPath": {} },
+#             "PositionalConstraint": "EXACTLY",
+#             "SearchString": "/openapi.yaml",
+#             "TextTransformations": [{ "Priority": 0, "Type": "NONE" }]
+#         }}
+#       ]
+#     }
+#   },
+#   "VisibilityConfig": {
+#     "SampledRequestsEnabled": true,
+#     "CloudWatchMetricsEnabled": true,
+#     "MetricName": "AllowAgentDiscoveryPaths"
+#   }
+# }
